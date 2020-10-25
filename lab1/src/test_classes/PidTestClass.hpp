@@ -19,45 +19,46 @@ private:
     int x;
     int (*f)(int);
     int (*g)(int);
-    int port_for_f = 4012;
-    int port_for_g = 4013;
+    int port_for_f = 4030;
+    int port_for_g = 4031;
 public:
     PidTestClass(int _x, int (*_f)(int), int (*_g)(int)): x(_x), g(_g), f(_f) {}
 
     void calculate(int (*function)(int), int port) {
-        //std::cout << function(x) << "\n";
-        sleep(3);
-        int sock = 0, valread;
-        struct sockaddr_in serv_addr;
-        std::string result = std::to_string(function(x));
-        char hello[100];// = new char[1000];
-        strcpy(hello, result.c_str());
-        char buffer[1024] = {0};
-        if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-        {
-            printf("\n Socket creation error \n");
-            return;
-        }
+        pid_t pid = fork();
+        if (pid == 0) {
+            sleep(3);
+            int sock = 0, valread;
+            struct sockaddr_in serv_addr;
+            std::string result = std::to_string(function(x));
+            char hello[100];// = new char[1000];
+            strcpy(hello, result.c_str());
+            char buffer[1024] = {0};
+            if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+                printf("\n Socket creation error \n");
+                return;
+            }
 
-        serv_addr.sin_family = AF_INET;
-        serv_addr.sin_port = htons(port);
+            serv_addr.sin_family = AF_INET;
+            serv_addr.sin_port = htons(port);
 
-        // Convert IPv4 and IPv6 addresses from text to binary form
-        if(inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr)<=0)
-        {
-            printf("\nInvalid address/ Address not supported \n");
-            return;
-        }
+            // Convert IPv4 and IPv6 addresses from text to binary form
+            if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
+                printf("\nInvalid address/ Address not supported \n");
+                return;
+            }
 
-        if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
-        {
-            printf("\nConnection Failed \n");
-            return;
+            if (connect(sock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
+                printf("\nConnection Failed \n");
+                return;
+            }
+            send(sock, hello, strlen(hello), 0);
+            valread = read(sock, buffer, 1024);
+            printf("%s\n", buffer);
+            exit(0);
         }
-        send(sock , hello , strlen(hello) , 0 );
-        printf("Hello message sent\n");
-        valread = read( sock , buffer, 1024);
-        printf("%s\n",buffer );
+        if (pid < 0)
+            std::cerr << "fork() failed!" << std::endl;
     }
 
     int get_result_from_port(int port) {
@@ -77,7 +78,8 @@ public:
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = INADDR_ANY;
         address.sin_port = htons(port);
-        if (setsockopt (server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt)) == -1) perror("setsockopt");
+        if (setsockopt (server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt)) == -1)
+            perror("setsockopt");
         // Forcefully attaching socket to the port 8080
         if (bind(server_fd, (struct sockaddr *)&address,
                  sizeof(address))<0)
@@ -104,38 +106,21 @@ public:
 
     }
     void run() {
-        // creating threads for waiting result of computations
         std::future<int> f_x_value(std::async(&PidTestClass::get_result_from_port, this, port_for_f));
         std::future<int> g_x_value(std::async(&PidTestClass::get_result_from_port, this, port_for_g));
-        pid_t pid_f = fork();
-
-        if (pid_f == 0)
-            calculate(f, port_for_f);
-        else if (pid_f > 0)
-        {
-            pid_t  pid_g = fork();
-            if (pid_g == 0)
-                calculate(g, port_for_g);
-            else {
-                bool f_is_ready = false;
-                bool g_is_ready = false;
-                while(!f_is_ready || !g_is_ready) {
-                    if (!f_is_ready && f_x_value.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                        f_is_ready = true;
-                    }
-                    if (!g_is_ready && g_x_value.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                        g_is_ready = true;
-                    }
-                    //std::cout << f_is_ready << "  " << g_is_ready << "\n";
-                }
-                std::cout << f_x_value.get() << " " << g_x_value.get() << "\n";
-            }
+        int a = 5;
+        calculate(f, port_for_f);
+        calculate(g, port_for_g);
+        std::cout << a << "hey there\n";
+        bool f_is_ready = false;
+        bool g_is_ready = false;
+        while(!f_is_ready || !g_is_ready) {
+            if (!f_is_ready && f_x_value.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+                f_is_ready = true;
+            if (!g_is_ready && g_x_value.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+                g_is_ready = true;
         }
-        else
-        {
-            // fork failed
-            std::cerr << "fork() failed!" << std::endl;
-        }
+        std::cout << f_x_value.get() << " " << g_x_value.get() << "\n";
     }
 };
 
