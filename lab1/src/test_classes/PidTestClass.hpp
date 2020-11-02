@@ -11,7 +11,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <future>
-#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
@@ -66,9 +65,6 @@ public:
         else return pid;
     }
 
-//    int cancellation_interactor() {
-//
-//    }
 
     int get_result_from_port(int port) {
         int server_fd, new_socket;

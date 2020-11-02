@@ -8,7 +8,6 @@ int sqr(int x) {
 }
 
 int zero(int x) {
-    sleep(4);
     return 0;
 }
 
@@ -20,8 +19,8 @@ int div2(int x) {
 
 int main(int argc, char **argv)
 {
+    sleep(10);
     Manager testClass = Manager(3, div2, zero);
     std::cout << testClass.run() << "\n";
-    assert(testClass.run() != 13);
-    exit(0);
+    return 0;
 }
