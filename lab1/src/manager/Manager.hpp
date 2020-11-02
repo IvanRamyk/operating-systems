@@ -1,8 +1,8 @@
 //
 // Created by Ivan Ramyk on 10/24/20.
 //
-#ifndef LAB1_PIDTESTCLASS_HPP
-#define LAB1_PIDTESTCLASS_HPP
+#ifndef LAB1_MANAGER_HPP
+#define LAB1_MANAGER_HPP
 
 #include <iostream>
 #include <unistd.h>
@@ -11,9 +11,39 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <future>
+#include <utility>
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
+#include <termios.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+int oldfl = 0;
+
+termios replace_terminal(){
+
+    termios old_tio{};      // for storing settings from old terminal
+    tcgetattr(STDIN_FILENO, &old_tio);  // save old terminal
+
+    termios new_tio{old_tio};
+    new_tio.c_lflag &= (~ICANON & ~ECHO);// disable canonical mode (buffered i/o) and local echo
+    oldfl = fcntl(0, F_GETFL);
+    fcntl(0, F_SETFL, O_NONBLOCK);
+    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+    /* set the new settings */
+
+    return old_tio;
+}
+
+void set_terminal(const termios &terminal){
+
+    if (oldfl == -1) {
+        return;
+    }
+    fcntl(0, F_SETFL, oldfl & ~O_NONBLOCK);
+    tcsetattr(STDIN_FILENO, TCSANOW, &terminal);
+}
 
 
 class Manager {
@@ -23,10 +53,53 @@ private:
     int (*g)(int);
     int port_for_f = 4030;
     int port_for_g = 4031;
+    int f_pid;
+    int g_pid;
+    bool f_is_ready = false;
+    bool g_is_ready = false;
     std::future<int> f_x_computation;
     std::future<int> g_x_computation;
+    std::string status;
+
 public:
     Manager(int _x, int (*_f)(int), int (*_g)(int)): x(_x), g(_g), f(_f) {}
+
+    int run_keyboard_listener() {
+        std::cout << "task is run\n";
+        auto terminal = replace_terminal();
+        std::cout << "some magic is happened\n" << status << "\n";
+        while (status == "running") {
+            sleep(1);
+            std::cout << "bla-bla-bla\n";
+            std::cout << "wait " << std::endl;
+            char c = getchar();
+            std::cout << "c = " << c << " \nPam-Pam\n";
+            if (c == 'q') {
+                {
+                    std::cout << "bye!" << std::endl;
+                }
+                break;
+            }
+        }
+        std::cout << "while is over\n";
+        set_terminal(terminal);
+        return -1;
+    }
+
+    void set_state(std::string new_value) {
+        status = std::move(new_value);
+    }
+
+    void terminateUnfinished() {
+        if (!f_is_ready) {
+            send_message("0", port_for_f);
+            kill(f_pid, SIGKILL);
+        }
+        if (!g_is_ready) {
+            send_message("0", port_for_g);
+            kill(g_pid, SIGKILL);
+        }
+    }
 
     void send_message(char* message, int port) {
         int sock = 0;
@@ -109,20 +182,29 @@ public:
         return std::atoi(buffer);
 
     }
+
     int run() {
+        status = "running";
         f_x_computation = std::future<int>(std::async(&Manager::get_result_from_port, this, port_for_f));
         g_x_computation = std::future<int>(std::async(&Manager::get_result_from_port, this, port_for_g));
-        int f_pid = calculate(f, port_for_f);
-        int g_pid = calculate(g, port_for_g);
-        bool f_is_ready = false, g_is_ready = false;
+        auto cancellation = std::future<int>(std::async(&Manager::run_keyboard_listener, this));
+        f_pid = calculate(f, port_for_f);
+        g_pid = calculate(g, port_for_g);
+        std::cout << f_pid << " " << g_pid << "\n";
         int f_x_value, g_x_value;
-        while(!f_is_ready || !g_is_ready) {
+        bool cancelled = false;
+        while((!f_is_ready || !g_is_ready) && !cancelled) {
+            if (cancellation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                cancelled = true;
+                status = "cancelled";
+                terminateUnfinished();
+            }
             if (!f_is_ready && f_x_computation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 f_is_ready = true;
                 f_x_value = f_x_computation.get();
                 if (f_x_value == 0) {
-                    kill(g_pid, SIGKILL);
-                    send_message("0", port_for_g);
+                    terminateUnfinished();
+                    set_state("finished");
                     return 0;
                 }
             }
@@ -130,15 +212,16 @@ public:
                 g_is_ready = true;
                 g_x_value = g_x_computation.get();
                 if (g_x_value == 0) {
-                    kill(f_pid, SIGKILL);
-                    send_message("0", port_for_f);
+                    terminateUnfinished();
+                    set_state("finished");
                     return 0;
                 }
             }
         }
+        std::cout << "something\n";
         return f_x_value * g_x_value;
     }
 };
 
 
-#endif //LAB1_PIDTESTCLASS_HPP
+#endif //LAB1_MANAGER_HPP

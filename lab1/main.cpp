@@ -1,4 +1,4 @@
-#include "src/test_classes/PidTestClass.hpp"
+#include "src/manager/Manager.hpp"
 
 #include <iostream>
 
@@ -8,6 +8,7 @@ int sqr(int x) {
 }
 
 int zero(int x) {
+    sleep(10);
     return 0;
 }
 
@@ -19,8 +20,7 @@ int div2(int x) {
 
 int main(int argc, char **argv)
 {
-    sleep(10);
-    Manager testClass = Manager(3, div2, zero);
-    std::cout << testClass.run() << "\n";
+    Manager manager = Manager(3, div2, zero);
+    std::cout << manager.run() << "\n";
     return 0;
 }
