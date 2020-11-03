@@ -19,75 +19,104 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-int oldfl = 0;
-
-termios replace_terminal(){
-
-    termios old_tio{};      // for storing settings from old terminal
-    tcgetattr(STDIN_FILENO, &old_tio);  // save old terminal
-
-    termios new_tio{old_tio};
-    new_tio.c_lflag &= (~ICANON & ~ECHO);// disable canonical mode (buffered i/o) and local echo
-    oldfl = fcntl(0, F_GETFL);
-    fcntl(0, F_SETFL, O_NONBLOCK);
-    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-    /* set the new settings */
-
-    return old_tio;
-}
-
-void set_terminal(const termios &terminal){
-
-    if (oldfl == -1) {
-        return;
-    }
-    fcntl(0, F_SETFL, oldfl & ~O_NONBLOCK);
-    tcsetattr(STDIN_FILENO, TCSANOW, &terminal);
-}
-
-
 class Manager {
+
+public:
+    Manager(int _x, int (*_f)(int), int (*_g)(int)): x(_x), g(_g), f(_f) {}
+
+    int run() {
+        std::cout << "Processing...\n";
+        auto start_of_computation = clock();
+        f_x_computation = std::future<int>(std::async(&Manager::get_function_computation_result_from_port, port_for_f));
+        g_x_computation = std::future<int>(std::async(&Manager::get_function_computation_result_from_port, port_for_g));
+        auto cancellation = std::future<void>(std::async(&Manager::run_keyboard_listener, this));
+        f_pid = run_function_computation(f, port_for_f);
+        g_pid = run_function_computation(g, port_for_g);
+        int f_x_value, g_x_value;
+        while(!f_is_ready || !g_is_ready) {
+            if (cancellation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                is_finished = true;
+                terminateUnfinished();
+                std::cout << "Computations were canceled.\n";
+                return -1;
+            }
+            if (!f_is_ready && f_x_computation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                f_is_ready = true;
+                f_x_value = f_x_computation.get();
+                std::cout << "Computation of f(x) value is finished. f value is " << f_x_value << "\n";
+                if (f_x_value == 0) {
+                    std::cout << "f(x) has a zero value, so computation of g(x) value will be terminated immediately\n";
+                    terminateUnfinished();
+                    is_finished = true;
+                    print_fuction_computation_result(0);
+                    return 0;
+                }
+            }
+            if (!g_is_ready && g_x_computation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                g_is_ready = true;
+                g_x_value = g_x_computation.get();
+                std::cout << "Computation of g(x) value is finished. g value is " << g_x_value << "\n";
+                if (g_x_value == 0) {
+                    std::cout << "g(x) has a zero value, so computation of f(x) value will be terminated immediately\n";
+                    terminateUnfinished();
+                    is_finished = true;
+                    print_fuction_computation_result(0);
+                    return 0;
+                }
+            }
+        }
+        is_finished = true;
+        int result = f_x_value * g_x_value;
+        print_fuction_computation_result(result);
+        return result;
+    }
+
 private:
+    static void print_fuction_computation_result(int result) {
+        std::cout << "Computations are finished. Result: " << result << "\n\n";
+    }
+
     int x;
     int (*f)(int);
     int (*g)(int);
     int port_for_f = 4030;
     int port_for_g = 4031;
-    int f_pid;
-    int g_pid;
+    int f_pid{};
+    int g_pid{};
     bool f_is_ready = false;
     bool g_is_ready = false;
     std::future<int> f_x_computation;
     std::future<int> g_x_computation;
-    std::string status;
+    bool is_finished = false;
+    int oldfl = 0;
 
-public:
-    Manager(int _x, int (*_f)(int), int (*_g)(int)): x(_x), g(_g), f(_f) {}
-
-    int run_keyboard_listener() {
-        std::cout << "task is run\n";
-        auto terminal = replace_terminal();
-        std::cout << "some magic is happened\n" << status << "\n";
-        while (status == "running") {
-            sleep(1);
-            std::cout << "bla-bla-bla\n";
-            std::cout << "wait " << std::endl;
-            char c = getchar();
-            std::cout << "c = " << c << " \nPam-Pam\n";
-            if (c == 'q') {
-                {
-                    std::cout << "bye!" << std::endl;
-                }
-                break;
-            }
-        }
-        std::cout << "while is over\n";
-        set_terminal(terminal);
-        return -1;
+    termios set_terminal_for_cancellation_mode(){// returns old terminal properties
+        termios old_properties{};
+        tcgetattr(STDIN_FILENO, &old_properties);
+        termios new_properties{old_properties};
+        new_properties.c_lflag &= ~ICANON & ~ECHO;
+        oldfl = fcntl(0, F_GETFL);
+        fcntl(0, F_SETFL, O_NONBLOCK);
+        tcsetattr(STDIN_FILENO, TCSANOW, &new_properties);
+        return old_properties;
     }
 
-    void set_state(std::string new_value) {
-        status = std::move(new_value);
+    void restore_terminal(const termios &terminal){
+        if (oldfl == -1) {
+            return;
+        }
+        fcntl(0, F_SETFL, oldfl & ~O_NONBLOCK);
+        tcsetattr(STDIN_FILENO, TCSANOW, &terminal);
+    }
+
+    void run_keyboard_listener() {
+        auto old_terminal_properties = set_terminal_for_cancellation_mode();
+        while (!is_finished) {
+            char c = getchar();
+            if (c == 'q')
+                break;
+        }
+        restore_terminal(old_terminal_properties);
     }
 
     void terminateUnfinished() {
@@ -101,126 +130,85 @@ public:
         }
     }
 
-    void send_message(char* message, int port) {
+    static void send_message(char* message, int port) {
         int sock = 0;
         if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-            printf("\n Socket creation error \n");
-            exit(0);
+            std::cout << "\n Socket creation error \n";
+            return;
         }
         struct sockaddr_in serv_addr;
         serv_addr.sin_family = AF_INET;
         serv_addr.sin_port = htons(port);
-
-        // Convert IPv4 and IPv6 addresses from text to binary form
         if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-            printf("\nInvalid address/ Address not supported \n");
-            exit(0);
+            std::cout << "\nInvalid address/ Address not supported \n";
+            return;
         }
-
         if (connect(sock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
-            printf("\nConnection Failed \n");
-            exit(0);
+            std::cout << "\nConnection Failed \n";
+            return;
         }
         send(sock, message, strlen(message), 0);
     }
 
-    int calculate(int (*function)(int), int port) {
+    int run_function_computation(int (*function)(int), int port) {
         pid_t pid = fork();
         if (pid == 0) {
             std::string result = std::to_string(function(x));
-            char message[100];
+            char message[20];
             strcpy(message, result.c_str());
             send_message(message, port);
             exit(0);
         }
         else if (pid < 0)
-            std::cerr << "fork() failed!" << std::endl;
-        else return pid;
+            std::cout << "fork creation failed!" << std::endl;
+        else
+            return pid;
     }
 
 
-    int get_result_from_port(int port) {
+    static int get_function_computation_result_from_port(int port) {
         int server_fd, new_socket;
         struct sockaddr_in address;
         int opt = 1;
         int addrlen = sizeof(address);
-        char buffer[1024] = {0};
-
-        // Creating socket file descriptor
+        char buffer[20] = {0};
         if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0)
         {
-            perror("socket failed");
-            exit(EXIT_FAILURE);
+            std::cout << "socket failed";
+            return -1;
         }
 
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = INADDR_ANY;
         address.sin_port = htons(port);
         if (setsockopt (server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt)) == -1)
-            perror("setsockopt");
-        // Forcefully attaching socket to the port 8080
+            std::cout << "setsockopt";
+
         if (bind(server_fd, (struct sockaddr *)&address,
                  sizeof(address))<0)
         {
-            perror("bind failed");
-            exit(EXIT_FAILURE);
+            std::cout << "bind failed";
+            return -1;
         }
         if (listen(server_fd, 3) < 0)
         {
-            perror("listen");
-            exit(EXIT_FAILURE);
+            std::cout << "listen";
+            return -1;
         }
         if ((new_socket = accept(server_fd, (struct sockaddr *)&address,
                                  (socklen_t*)&addrlen))<0)
         {
-            perror("accept");
-            exit(EXIT_FAILURE);
+            std::cout << "\n accept error\n";
+            return -1;
         }
-        read(new_socket , buffer, 1024);
+        read(new_socket , buffer, 20);
         close(new_socket);
         close(server_fd);
         return std::atoi(buffer);
 
     }
 
-    int run() {
-        status = "running";
-        f_x_computation = std::future<int>(std::async(&Manager::get_result_from_port, this, port_for_f));
-        g_x_computation = std::future<int>(std::async(&Manager::get_result_from_port, this, port_for_g));
-        auto cancellation = std::future<int>(std::async(&Manager::run_keyboard_listener, this));
-        f_pid = calculate(f, port_for_f);
-        g_pid = calculate(g, port_for_g);
-        std::cout << f_pid << " " << g_pid << "\n";
-        int f_x_value, g_x_value;
-        bool cancelled = false;
-        while((!f_is_ready || !g_is_ready) && !cancelled) {
-            if (cancellation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                cancelled = true;
-                status = "cancelled";
-                terminateUnfinished();
-            }
-            if (!f_is_ready && f_x_computation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                f_is_ready = true;
-                f_x_value = f_x_computation.get();
-                if (f_x_value == 0) {
-                    terminateUnfinished();
-                    set_state("finished");
-                    return 0;
-                }
-            }
-            if (!g_is_ready && g_x_computation.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                g_is_ready = true;
-                g_x_value = g_x_computation.get();
-                if (g_x_value == 0) {
-                    terminateUnfinished();
-                    set_state("finished");
-                    return 0;
-                }
-            }
-        }
-        std::cout << "something\n";
-        return f_x_value * g_x_value;
-    }
+
 };
 
 

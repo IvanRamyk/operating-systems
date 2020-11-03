@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.14)
 project(lab1)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 20)
 
-add_executable(lab1 main.cpp src/manager/Manager.cpp src/manager/Manager.hpp)
+add_executable(lab1 main.cpp src/manager/Manager.cpp src/manager/Manager.hpp demofuncs/demofuncs.h)
